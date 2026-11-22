@@ -22,8 +22,11 @@ select,input,textarea{background:var(--card);border:1px solid var(--line);border
 .tabs button.on{background:var(--accent);color:#fff;border-color:var(--accent)}
 main{padding:16px;max-width:1300px;margin:0 auto}
 .hint{color:var(--muted);margin:0 0 12px}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px}
-.tile{background:var(--card);border:1px solid var(--line);border-left:5px solid var(--accent);border-radius:10px;padding:12px;cursor:grab;user-select:none;transition:box-shadow .1s,transform .1s}
+.gridwrap{position:relative}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:34px 30px;position:relative}
+#links{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;overflow:visible;z-index:0}
+#links path{fill:none;stroke-width:2;stroke-linecap:round}
+.tile{position:relative;z-index:1;background:var(--card);border:1px solid var(--line);border-left:5px solid var(--accent);border-radius:10px;padding:12px;cursor:grab;user-select:none;transition:box-shadow .1s,transform .1s}
 .tile:hover{box-shadow:0 2px 10px rgba(0,0,0,.12)}
 .tile.dragging{opacity:.4}
 .tile.over{outline:3px dashed var(--accent);transform:scale(1.02)}
@@ -164,6 +167,10 @@ function renderTiles(){
   const m = $("#main");
   if (!S.tasks.length) return m.innerHTML = `<div class="empty">No tasks yet. Click <b>+ Task</b>.</div>`;
   m.innerHTML = `<p class="hint">Click a tile to edit. Drag one tile onto another to link them. &#128274; = waiting on an unfinished dependency.</p>
+    <div class="gridwrap"><svg id="links"><defs>
+      <marker id="ah-m" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--muted)" stroke="none"/></marker>
+      <marker id="ah-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--ok)" stroke="none"/></marker>
+      <marker id="ah-w" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--warn)" stroke="none"/></marker></defs></svg>
     <div class="grid">${list.map(t => {
       const cls = [isDone(t)&&"done", isLate(t)&&"late", isBlocked(t)&&"blocked"].filter(Boolean).join(" ");
       const deps = (t.taskDependency||[]).map(byId).filter(Boolean);
@@ -173,7 +180,9 @@ function renderTiles(){
         <div class="bar"><i style="width:${t.taskProgress}%"></i></div>
         <div class="pct">${t.taskProgress}%</div>
         ${(t.taskType||t.taskOwner||deps.length)?`<div class="chips">${t.taskType?`<span class="chip">${esc(t.taskType)}</span>`:""}${t.taskOwner?`<span class="chip">&#128100; ${esc(t.taskOwner)}</span>`:""}${deps.length?`<span class="chip">after: ${deps.map(d=>esc(d.taskTitle)).join(", ")}</span>`:""}</div>`:""}
-      </div>`; }).join("")}</div>`;
+      </div>`; }).join("")}</div></div>`;
+  drawLinks();
+  if (window.ResizeObserver){ renderTiles.ro?.disconnect(); renderTiles.ro = new ResizeObserver(drawLinks); renderTiles.ro.observe(m.querySelector(".grid")); }
   let dragId = null;
   m.querySelectorAll(".tile").forEach(el => {
     el.onclick = () => editTask(byId(el.dataset.id));
@@ -185,6 +194,43 @@ function renderTiles(){
       if (dragId && dragId !== el.dataset.id) confirmLink(dragId, el.dataset.id); dragId = null; };
   });
 }
+
+/* ---------- link arrows ---------- */
+// Arrow runs from the prerequisite tile to the tile that depends on it. Lines sit behind the tiles, so only the gaps show.
+function drawLinks(){
+  const svg = $("#links"); if (!svg) return;
+  svg.querySelectorAll("path.ln").forEach(p => p.remove());
+  const wrap = svg.parentElement.getBoundingClientRect();
+  const tiles = {};
+  svg.parentElement.querySelectorAll(".tile").forEach(el => { const r = el.getBoundingClientRect();
+    tiles[el.dataset.id] = { x:r.left-wrap.left, y:r.top-wrap.top, w:r.width, h:r.height }; });
+  const NS = "http://www.w3.org/2000/svg";
+  S.tasks.forEach(post => (post.taskDependency||[]).forEach(preId => {
+    const a = tiles[preId], b = tiles[post.id]; if (!a || !b) return;
+    const pre = byId(preId), gap = 3;
+    let x1,y1,x2,y2,d;
+    const ac = { x:a.x+a.w/2, y:a.y+a.h/2 }, bc = { x:b.x+b.w/2, y:b.y+b.h/2 };
+    if (b.y > a.y + a.h/2){            // target is on a lower row: bottom -> top
+      x1=ac.x; y1=a.y+a.h+gap; x2=bc.x; y2=b.y-gap; const k=Math.max(20,(y2-y1)/2);
+      d=`M${x1},${y1} C${x1},${y1+k} ${x2},${y2-k} ${x2},${y2}`;
+    } else if (b.y < a.y - a.h/2){     // target is on a higher row: top -> bottom
+      x1=ac.x; y1=a.y-gap; x2=bc.x; y2=b.y+b.h+gap; const k=Math.max(20,(y1-y2)/2);
+      d=`M${x1},${y1} C${x1},${y1-k} ${x2},${y2+k} ${x2},${y2}`;
+    } else {                            // same row: side to side
+      const right = bc.x > ac.x;
+      x1=right?a.x+a.w+gap:a.x-gap; y1=ac.y; x2=right?b.x-gap:b.x+b.w+gap; y2=bc.y; const k=Math.max(12,Math.abs(x2-x1)/2);
+      d=`M${x1},${y1} C${x1+(right?k:-k)},${y1} ${x2-(right?k:-k)},${y2} ${x2},${y2}`;
+    }
+    const p = document.createElementNS(NS,"path");
+    const done = isDone(pre);
+    p.setAttribute("class","ln"); p.setAttribute("d",d);
+    p.setAttribute("stroke", done ? "var(--ok)" : "var(--muted)");
+    p.setAttribute("marker-end", done ? "url(#ah-ok)" : "url(#ah-m)");
+    if (!done) p.setAttribute("stroke-dasharray","none");
+    svg.appendChild(p);
+  }));
+}
+window.addEventListener("resize", drawLinks);
 
 /* ---------- dependencies ---------- */
 // would adding "pre must finish before post" create a loop? (i.e. is post already a prerequisite of pre, directly or indirectly)
